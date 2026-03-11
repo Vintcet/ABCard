@@ -2,13 +2,11 @@
 自动化绑卡支付 - Streamlit UI
 运行: streamlit run ui.py --server.address 0.0.0.0 --server.port 8501
 """
-import csv
 import json
 import logging
 import os
 import sys
 import traceback
-from datetime import datetime
 
 import streamlit as st
 
@@ -22,11 +20,31 @@ from logger import ResultStore
 
 OUTPUT_DIR = "test_outputs"
 
+# 国家 → 默认货币 映射
+COUNTRY_MAP = {
+    "JP - 日本": ("JP", "JPY", "Tokyo", "1-1-1 Shibuya"),
+    "US - 美国": ("US", "USD", "California", "123 Main St"),
+    "DE - 德国": ("DE", "EUR", "Berlin", "Hauptstraße 1"),
+    "GB - 英国": ("GB", "GBP", "London", "10 Downing St"),
+    "FR - 法国": ("FR", "EUR", "Paris", "1 Rue de Rivoli"),
+    "SG - 新加坡": ("SG", "SGD", "Singapore", "1 Raffles Place"),
+    "HK - 香港": ("HK", "HKD", "Hong Kong", "1 Queen's Road"),
+    "KR - 韩国": ("KR", "KRW", "Seoul", "1 Gangnam-daero"),
+    "AU - 澳大利亚": ("AU", "AUD", "NSW", "1 George St"),
+    "CA - 加拿大": ("CA", "CAD", "Ontario", "123 King St"),
+    "NL - 荷兰": ("NL", "EUR", "Amsterdam", "Damrak 1"),
+    "IT - 意大利": ("IT", "EUR", "Rome", "Via Roma 1"),
+    "ES - 西班牙": ("ES", "EUR", "Madrid", "Calle Mayor 1"),
+    "CH - 瑞士": ("CH", "CHF", "Zurich", "Bahnhofstrasse 1"),
+}
+
 st.set_page_config(page_title="Auto BindCard", page_icon="💳", layout="wide")
 
 st.markdown("""
 <style>
-    section[data-testid="stSidebar"] .stTextInput > div > div > input { padding: 0.3rem 0.5rem; }
+    .block-container { max-width: 1100px; padding-top: 1.5rem; }
+    div[data-testid="stExpander"] { border: 1px solid #333; border-radius: 8px; margin-bottom: 0.5rem; }
+    .stProgress > div > div { height: 6px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -51,86 +69,90 @@ def init_logging():
     root.addHandler(handler)
 
 
-# ── Session State ──
 for k, v in {"log_buffer": [], "running": False, "result": None}.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 
 # ════════════════════════════════════════
-# 侧边栏
-# ════════════════════════════════════════
-with st.sidebar:
-    st.title("⚙️ 配置")
-
-    st.subheader("流程")
-    do_register = st.checkbox("注册账号", value=True)
-    do_checkout = st.checkbox("创建 Checkout", value=True)
-    do_payment = st.checkbox("提交支付", value=False, help="需要真实信用卡")
-
-    st.divider()
-    proxy = st.text_input("🌐 代理", placeholder="socks5://127.0.0.1:1080")
-
-    st.divider()
-    with st.expander("📧 邮箱", expanded=False):
-        mail_worker = st.text_input("Worker", value="https://apimail.mkai.de5.net")
-        mail_domain = st.text_input("域名", value="mkai.de5.net")
-        mail_token = st.text_input("Token", value="ma123999", type="password")
-
-    with st.expander("📋 Team Plan", expanded=False):
-        workspace_name = st.text_input("Workspace", value="Artizancloud")
-        seat_quantity = st.number_input("席位", min_value=2, max_value=50, value=5)
-        promo_campaign = st.text_input("促销 ID", value="team1dollar")
-
-    with st.expander("💰 账单", expanded=False):
-        c1, c2 = st.columns(2)
-        country = c1.selectbox("国家", ["JP", "US", "SG", "HK", "GB"])
-        currency = c2.selectbox("货币", ["JPY", "USD", "SGD", "HKD", "GBP"])
-        billing_name = st.text_input("姓名", value="Test User")
-        address_line1 = st.text_input("地址", value="1-1-1 Shibuya")
-        address_state = st.text_input("州/省", value="Tokyo")
-
-    if do_payment:
-        with st.expander("💳 信用卡", expanded=True):
-            card_number = st.text_input("卡号", placeholder="真实卡号")
-            c1, c2, c3 = st.columns(3)
-            exp_month = c1.text_input("月", value="12")
-            exp_year = c2.text_input("年", value="2030")
-            card_cvc = c3.text_input("CVC", type="password")
-            st.warning("⚠️ Live 模式，真实扣款")
-
-
-# ════════════════════════════════════════
-# 主界面
+# 顶部标题 + 流程选择
 # ════════════════════════════════════════
 st.title("💳 Auto BindCard")
 
-steps = []
-if do_register: steps.append("注册")
-if do_checkout: steps.append("Checkout")
-if do_payment: steps.append("支付")
-st.caption(" → ".join(steps) if steps else "请选择流程步骤")
+col_step1, col_step2, col_step3, col_proxy = st.columns([1, 1, 1, 2])
+with col_step1:
+    do_register = st.checkbox("注册账号", value=True)
+with col_step2:
+    do_checkout = st.checkbox("创建 Checkout", value=True)
+with col_step3:
+    do_payment = st.checkbox("提交支付", value=False, help="需要真实信用卡")
+with col_proxy:
+    proxy = st.text_input("代理 (可选)", placeholder="socks5://127.0.0.1:1080", label_visibility="collapsed")
+
+st.divider()
+
+# ════════════════════════════════════════
+# 配置区 - 使用 expander 折叠在主区
+# ════════════════════════════════════════
+cfg_col1, cfg_col2 = st.columns(2)
+
+with cfg_col1:
+    with st.expander("📧 邮箱 & Team Plan 配置", expanded=False):
+        mail_worker = st.text_input("邮箱 Worker", value="https://apimail.mkai.de5.net")
+        mc1, mc2 = st.columns(2)
+        mail_domain = mc1.text_input("邮箱域名", value="mkai.de5.net")
+        mail_token = mc2.text_input("邮箱 Token", value="ma123999", type="password")
+
+        st.markdown("---")
+        tc1, tc2, tc3 = st.columns(3)
+        workspace_name = tc1.text_input("Workspace", value="Artizancloud")
+        seat_quantity = tc2.number_input("席位数", min_value=2, max_value=50, value=5)
+        promo_campaign = tc3.text_input("活动 ID", value="team0dollar")
+
+with cfg_col2:
+    with st.expander("💰 账单地址", expanded=False):
+        country_label = st.selectbox("国家", list(COUNTRY_MAP.keys()), index=0)
+        country_code, default_currency, default_state, default_addr = COUNTRY_MAP[country_label]
+        bc1, bc2 = st.columns(2)
+        billing_name = bc1.text_input("姓名", value="Test User")
+        currency = bc2.text_input("货币", value=default_currency)
+        bc3, bc4 = st.columns(2)
+        address_line1 = bc3.text_input("地址", value=default_addr)
+        address_state = bc4.text_input("州/省", value=default_state)
+
+if do_payment:
+    with st.expander("💳 信用卡信息 ⚠️ Live 模式 - 真实扣款", expanded=True):
+        cc1, cc2, cc3, cc4 = st.columns([3, 1, 1, 1])
+        card_number = cc1.text_input("卡号", placeholder="真实卡号")
+        exp_month = cc2.text_input("月", value="12")
+        exp_year = cc3.text_input("年", value="2030")
+        card_cvc = cc4.text_input("CVC", type="password")
+
+st.divider()
+
+# ════════════════════════════════════════
+# Tabs: 执行 / 账号 / 历史
+# ════════════════════════════════════════
+steps_list = []
+if do_register: steps_list.append("注册")
+if do_checkout: steps_list.append("Checkout")
+if do_payment: steps_list.append("支付")
 
 tab_run, tab_accounts, tab_history = st.tabs(["▶ 执行", "📋 账号", "📊 历史"])
 
-# ════════════════════════════════════════
-# Tab: 执行
-# ════════════════════════════════════════
 with tab_run:
-    c1, c2, c3 = st.columns([2, 1, 1])
-    with c1:
-        run_btn = st.button("🚀 开始", disabled=st.session_state.running or not steps, use_container_width=True, type="primary")
-    with c2:
-        if st.button("🗑️ 清空", use_container_width=True):
+    # 流程链
+    if steps_list:
+        st.caption("流程: " + " → ".join(steps_list))
+
+    bc1, bc2 = st.columns([3, 1])
+    with bc1:
+        run_btn = st.button("🚀 开始执行", disabled=st.session_state.running or not steps_list, use_container_width=True, type="primary")
+    with bc2:
+        if st.button("🗑️ 清空日志", use_container_width=True):
             st.session_state.log_buffer = []
             st.session_state.result = None
             st.rerun()
-    with c3:
-        if st.session_state.result:
-            if st.session_state.result.get("success"):
-                st.success("✅")
-            else:
-                st.error("❌")
 
     if run_btn:
         st.session_state.running = True
@@ -154,7 +176,7 @@ with tab_run:
             cfg.team_plan.workspace_name = workspace_name
             cfg.team_plan.seat_quantity = seat_quantity
             cfg.team_plan.promo_campaign_id = promo_campaign
-            cfg.billing = BillingInfo(name=billing_name, email="", country=country, currency=currency,
+            cfg.billing = BillingInfo(name=billing_name, email="", country=country_code, currency=currency,
                                       address_line1=address_line1, address_state=address_state)
             if do_payment:
                 cfg.card = CardInfo(number=card_number, cvc=card_cvc, exp_month=exp_month, exp_year=exp_year)
@@ -172,7 +194,7 @@ with tab_run:
                 rd["email"] = auth_result.email
                 rd["steps"]["register"] = "✅"
                 pbar.progress(40)
-                status.success(f"✅ 注册: {auth_result.email}")
+                status.success(f"✅ 注册完成: {auth_result.email}")
                 store.save_credentials(auth_result.to_dict())
                 store.append_credentials_csv(auth_result.to_dict())
                 log_area.code("\n".join(st.session_state.log_buffer[-80:]), language="log")
@@ -181,7 +203,7 @@ with tab_run:
             if do_checkout:
                 if not auth_result:
                     raise RuntimeError("需先注册或提供凭证")
-                status.info("⏳ Checkout...")
+                status.info("⏳ 创建 Checkout Session...")
                 pbar.progress(50)
                 cfg.billing.email = auth_result.email
                 pf = PaymentFlow(cfg, auth_result)
@@ -196,12 +218,12 @@ with tab_run:
                 rd["steps"]["checkout"] = "✅"
                 rd["steps"]["fingerprint"] = "✅"
                 pbar.progress(70)
-                status.success(f"✅ Checkout: {cs_id[:35]}...")
+                status.success(f"✅ Checkout: {cs_id[:40]}...")
                 log_area.code("\n".join(st.session_state.log_buffer[-80:]), language="log")
 
                 # ── 支付 ──
                 if do_payment:
-                    status.info("⏳ 支付...")
+                    status.info("⏳ 提交支付...")
                     pbar.progress(80)
                     pf.payment_method_id = pf.create_payment_method()
                     rd["steps"]["tokenize"] = "✅"
@@ -219,7 +241,7 @@ with tab_run:
 
             pbar.progress(100)
             if rd["success"]:
-                status.success(f"✅ 完成! {rd.get('email', '')}")
+                status.success(f"✅ 全部完成! {rd.get('email', '')}")
             else:
                 status.warning(f"⚠️ {rd.get('error', '')}")
 
@@ -243,24 +265,24 @@ with tab_run:
 
         log_area.code("\n".join(st.session_state.log_buffer[-200:]), language="log")
 
-    # ── 已有日志 ──
     elif st.session_state.log_buffer:
         st.code("\n".join(st.session_state.log_buffer[-200:]), language="log")
 
     # ── 结果卡片 ──
     if st.session_state.result and not run_btn:
         r = st.session_state.result
+        st.divider()
         cols = st.columns(4)
         cols[0].metric("邮箱", r.get("email") or "-")
-        cols[1].metric("Checkout", (r.get("checkout_session_id", "")[:18] + "...") if r.get("checkout_session_id") else "-")
+        cols[1].metric("Checkout", (r.get("checkout_session_id", "")[:20] + "...") if r.get("checkout_session_id") else "-")
         cols[2].metric("Confirm", r.get("confirm_status") or "-")
-        cols[3].metric("状态", "✅" if r.get("success") else "❌")
+        cols[3].metric("状态", "成功" if r.get("success") else "失败")
 
         if r.get("steps"):
-            for step, val in r["steps"].items():
-                st.text(f"  {step}: {val}")
+            step_text = "  |  ".join(f"{k}: {v}" for k, v in r["steps"].items())
+            st.caption(step_text)
 
-        with st.expander("JSON", expanded=False):
+        with st.expander("完整 JSON 结果", expanded=False):
             st.json(r)
 
 
@@ -275,26 +297,28 @@ with tab_accounts:
             df = pd.read_csv(csv_path)
             if not df.empty:
                 st.dataframe(df, use_container_width=True, hide_index=True)
-                st.caption(f"{len(df)} 条")
+                st.caption(f"共 {len(df)} 条记录")
                 if st.button("🔄 刷新", key="ref_acc"):
                     st.rerun()
             else:
-                st.info("暂无")
+                st.info("暂无账号记录")
         except Exception as e:
             st.error(str(e))
     else:
-        st.info("暂无。注册后自动保存。")
+        st.info("暂无账号。注册后自动保存到此处。")
 
     st.divider()
-    st.markdown("**凭证文件**")
-    if os.path.exists(OUTPUT_DIR):
-        cred_files = sorted([f for f in os.listdir(OUTPUT_DIR) if f.startswith("credentials_") and f.endswith(".json")], reverse=True)
-        if cred_files:
-            sel = st.selectbox("选择", cred_files, key="cred_sel")
-            if sel:
-                with open(os.path.join(OUTPUT_DIR, sel)) as f:
-                    data = json.load(f)
-                st.json({k: (v[:50] + "..." + v[-20:] if isinstance(v, str) and len(v) > 80 else v) for k, v in data.items()})
+    with st.expander("📁 凭证文件查看", expanded=False):
+        if os.path.exists(OUTPUT_DIR):
+            cred_files = sorted([f for f in os.listdir(OUTPUT_DIR) if f.startswith("credentials_") and f.endswith(".json")], reverse=True)
+            if cred_files:
+                sel = st.selectbox("选择凭证文件", cred_files, key="cred_sel")
+                if sel:
+                    with open(os.path.join(OUTPUT_DIR, sel)) as f:
+                        data = json.load(f)
+                    st.json({k: (v[:50] + "..." + v[-20:] if isinstance(v, str) and len(v) > 80 else v) for k, v in data.items()})
+            else:
+                st.caption("暂无凭证文件")
 
 
 # ════════════════════════════════════════
@@ -308,21 +332,24 @@ with tab_history:
             df = pd.read_csv(hist_path)
             if not df.empty:
                 st.dataframe(df, use_container_width=True, hide_index=True)
+                st.caption(f"共 {len(df)} 条")
                 if st.button("🔄 刷新", key="ref_hist"):
                     st.rerun()
             else:
-                st.info("暂无")
+                st.info("暂无历史")
         except Exception as e:
             st.error(str(e))
     else:
-        st.info("暂无")
+        st.info("暂无执行历史")
 
     st.divider()
-    st.markdown("**结果文件**")
-    if os.path.exists(OUTPUT_DIR):
-        rf = sorted([f for f in os.listdir(OUTPUT_DIR) if f.endswith(".json") and not f.startswith("credentials_") and not f.startswith("debug_")], reverse=True)
-        if rf:
-            sel = st.selectbox("选择", rf, key="res_sel")
-            if sel:
-                with open(os.path.join(OUTPUT_DIR, sel)) as f:
-                    st.json(json.load(f))
+    with st.expander("📁 结果文件查看", expanded=False):
+        if os.path.exists(OUTPUT_DIR):
+            rf = sorted([f for f in os.listdir(OUTPUT_DIR) if f.endswith(".json") and not f.startswith("credentials_") and not f.startswith("debug_")], reverse=True)
+            if rf:
+                sel = st.selectbox("选择结果文件", rf, key="res_sel")
+                if sel:
+                    with open(os.path.join(OUTPUT_DIR, sel)) as f:
+                        st.json(json.load(f))
+            else:
+                st.caption("暂无结果文件")

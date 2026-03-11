@@ -42,7 +42,7 @@ class TeamPlanConfig:
     workspace_name: str = "Artizancloud"
     price_interval: str = "month"
     seat_quantity: int = 5
-    promo_campaign_id: str = "team1dollar"
+    promo_campaign_id: str = "team0dollar"
 
 
 @dataclass
