@@ -175,12 +175,19 @@ with cfg_col2:
 
 if do_payment:
     with st.expander("💳 信用卡 ⚠️ Live 模式 - 真实扣款", expanded=True):
-        if st.button("🧪 填充测试卡", key="fill_test_card"):
-            st.session_state["_test_card_number"] = "4242424242424242"
-            st.session_state["_test_exp_month"] = "12"
-            st.session_state["_test_exp_year"] = "2030"
-            st.session_state["_test_cvc"] = "123"
-            st.rerun()
+        TEST_CARDS = {
+            "4242 4242 4242 4242 (标准测试卡)": ("4242424242424242", "123"),
+            "4000 0000 0000 0002 (卡片被拒)": ("4000000000000002", "123"),
+            "4000 0000 0000 0069 (过期卡)": ("4000000000000069", "123"),
+            "4000 0000 0000 9995 (余额不足)": ("4000000000009995", "123"),
+            "4000 0000 0000 0127 (CVC错误)": ("4000000000000127", "123"),
+            "5555 5555 5555 4444 (Mastercard)": ("5555555555554444", "123"),
+        }
+        tc_sel = st.selectbox("🧪 快速填充测试卡", ["不填充"] + list(TEST_CARDS.keys()), key="tc_sel")
+        if tc_sel != "不填充":
+            tc_num, tc_cvc = TEST_CARDS[tc_sel]
+            st.session_state["_test_card_number"] = tc_num
+            st.session_state["_test_cvc"] = tc_cvc
 
         _tn = st.session_state.get("_test_card_number", "")
         _tm = st.session_state.get("_test_exp_month", "12")
@@ -193,8 +200,8 @@ if do_payment:
         exp_year = cc3.text_input("年", value=_ty)
         card_cvc = cc4.text_input("CVC", value=_tc, type="password")
 
-        if card_number == "4242424242424242":
-            st.info("ℹ️ 测试卡仅在 test 模式下有效，live 模式会被拒绝")
+        if _tn and _tn.startswith("4"):
+            st.caption("⚠️ Live 模式下所有测试卡都会被拒绝，仅用于验证流程")
 
 st.divider()
 
