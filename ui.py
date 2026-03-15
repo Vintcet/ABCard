@@ -512,9 +512,11 @@ if do_register:
 use_browser_mode = True
 captcha_key = ""
 captcha_api_url = ""
-mail_worker = ""
-mail_domain = ""
-mail_token = ""
+if not do_register:
+    # 非注册模式时，邮箱配置使用空默认值 (开发者模式下有单独的输入框)
+    mail_worker = ""
+    mail_domain = ""
+    mail_token = ""
 # 计划类型选择 (始终可见)
 plan_type_label = st.radio(
     "选择计划",
@@ -896,8 +898,30 @@ with tab_run:
     with btn_col2:
         stop_btn = st.button("终止", disabled=not st.session_state.running, use_container_width=True)
 
-    # ── 点击开始: 验证兑换码、预留额度、启动线程 ──
+    # ── 点击开始: 表单验证 → 验证兑换码 → 预留额度 → 启动线程 ──
     if run_btn and not st.session_state.running:
+        # 表单验证
+        _errors = []
+        if do_register:
+            if not mail_worker or not mail_worker.startswith("http"):
+                _errors.append("请填写邮箱 Worker API 地址")
+            if not mail_domain:
+                _errors.append("请填写邮箱域名")
+            if not mail_token:
+                _errors.append("请填写邮箱 Token")
+        elif use_existing_creds and do_checkout:
+            if not cred_access_token:
+                _errors.append("请提供 access_token")
+        if do_payment:
+            if not card_number:
+                _errors.append("请填写卡号")
+            if not card_cvc:
+                _errors.append("请填写 CVC")
+        if _errors:
+            for _e in _errors:
+                st.error(_e)
+            st.stop()
+
         # 再次验证兑换码
         _v, _vm = validate_code(st.session_state.verified_code)
         if not _v:
