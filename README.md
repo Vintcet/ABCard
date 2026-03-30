@@ -18,8 +18,7 @@ playwright install chromium
 ```
 
 ### 3. 启动 Web UI
-
-# 启动 UI
+```
 streamlit run ui.py --server.address 0.0.0.0 --server.port 8503
 ```
 
